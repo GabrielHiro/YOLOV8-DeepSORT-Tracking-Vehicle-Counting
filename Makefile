@@ -194,12 +194,9 @@ edit-config:
 .PHONY: run-config
 run-config: check-deps
 	@echo "$(YELLOW)⚙️ Executando com configuração personalizada...$(NC)"
-	@$(PYTHON) simple_config_run.py --source $(VIDEO) --model $(MODEL) --show
+	@$(PYTHON) simple_report.py --source $(VIDEO) --model $(MODEL) --show
 
 .PHONY: run-webcam-config
 run-webcam-config: check-deps
 	@echo "$(YELLOW)📹 Executando webcam com configuração personalizada...$(NC)"
-	@$(PYTHON) simple_config_run.py --source 0 --model $(MODEL) --show
-
-# Executar com verificações
-run-video run-webcam run-save run-custom run-config: check-deps
+	@$(PYTHON) simple_report.py --source 0 --model $(MODEL) --show
