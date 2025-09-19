@@ -20,6 +20,36 @@ import cv2
 # from ultralytics.yolo.v8.detect.deep_sort_pytorch.deep_sort import DeepSort
 from collections import deque
 import numpy as np
+import sys
+import os
+
+# Importar configurações de contagem
+config_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'config')
+if config_path not in sys.path:
+    sys.path.append(config_path)
+
+try:
+    from counting_config import *
+    print("Configurações de contagem carregadas com sucesso!")
+except ImportError:
+    print("Arquivo de configuração não encontrado. Usando configurações padrão.")
+    # Configurações padrão
+    COUNTING_LINE = [(100, 500), (1050, 500)]
+    ROI_AREA = [(50, 100), (1200, 600)]
+    ENABLE_ROI = True
+    CROSSING_THRESHOLD = 10
+    COUNTING_DIRECTION = 'both'
+    VEHICLE_CLASSES = [2, 3, 5, 7, 8]
+    LINE_COLOR = (0, 255, 0)
+    ROI_COLOR = (255, 255, 0)
+    LINE_THICKNESS = 3
+    SHOW_COUNTERS = True
+    COUNTER_POSITION = (20, 50)
+    PIXELS_PER_METER = 8
+    SPEED_TIME_WINDOW = 15
+    MIN_CONFIDENCE = 0.5
+    MIN_OBJECT_SIZE = (30, 30)
+    TRACKING_BUFFER = 30
 
 palette = (2 ** 11 - 1, 2 ** 15 - 1, 2 ** 20 - 1)
 data_deque = {}
@@ -27,22 +57,56 @@ data_deque = {}
 deepsort = None
 
 object_counter = {}
-
 object_counter1 = {}
 
-line = [(100, 500), (1050, 500)]
+# Usar configuração carregada do arquivo
+line = COUNTING_LINE
 
 speed_line_queue = {}
 
 def estimatespeed(location1, location2):
-    d_pixel = math.sqrt(math.pow(location2[0] - location1[0], 2) + mat.pow(location2[1] - location1[1], 2))
-    # pixels per meter:
-    ppm = 8
+    d_pixel = math.sqrt(math.pow(location2[0] - location1[0], 2) + math.pow(location2[1] - location1[1], 2))
+    # Usar pixels por metro da configuração
+    ppm = PIXELS_PER_METER
     d_meters = d_pixel/ppm
-    time_constant = 15*3.6
+    time_constant = SPEED_TIME_WINDOW * 3.6
     
-    speed = d_meters*time_constant
+    speed = d_meters * time_constant
     return int(speed)
+
+def apply_roi(frame, roi_area):
+    """Aplicar ROI (Region of Interest) ao frame"""
+    if not ENABLE_ROI:
+        return frame
+    
+    # Criar máscara
+    mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+    cv2.rectangle(mask, roi_area[0], roi_area[1], 255, -1)
+    
+    # Aplicar máscara
+    result = cv2.bitwise_and(frame, frame, mask=mask)
+    return result
+
+def draw_roi(frame, roi_area, color=(255, 255, 0)):
+    """Desenhar ROI no frame"""
+    if ENABLE_ROI:
+        cv2.rectangle(frame, roi_area[0], roi_area[1], color, 2)
+        cv2.putText(frame, "ROI", (roi_area[0][0], roi_area[0][1] - 10),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+    return frame
+
+def is_in_roi(bbox, roi_area):
+    """Verificar se o objeto está dentro da ROI"""
+    if not ENABLE_ROI:
+        return True
+    
+    # Centro do objeto
+    center_x = int((bbox[0] + bbox[2]) / 2)
+    center_y = int((bbox[1] + bbox[3]) / 2)
+    
+    # Verificar se está dentro da ROI
+    return (roi_area[0][0] <= center_x <= roi_area[1][0] and 
+            roi_area[0][1] <= center_y <= roi_area[1][1])
     
 
 def init_tracker():
@@ -295,6 +359,11 @@ class DetectionPredictor(BasePredictor):
             im = im[None]  # expand for batch dim
         self.seen += 1
         im0 = im0.copy()
+        
+        # Aplicar ROI se habilitado
+        if ENABLE_ROI:
+            im0 = draw_roi(im0, ROI_AREA, ROI_COLOR)
+        
         if self.webcam:  # batch_size >= 1
             log_string += f'{idx}: '
             frame = self.dataset.count
@@ -309,34 +378,118 @@ class DetectionPredictor(BasePredictor):
 
         det = preds[idx]
         all_outputs.append(det)
+        
+        # Desenhar linha de contagem
+        cv2.line(im0, COUNTING_LINE[0], COUNTING_LINE[1], LINE_COLOR, LINE_THICKNESS)
+        cv2.putText(im0, "LINHA DE CONTAGEM", 
+                   (COUNTING_LINE[0][0], COUNTING_LINE[0][1] - 10),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, LINE_COLOR, 2)
+        
         if len(det) == 0:
+            if SHOW_COUNTERS:
+                im0 = draw_counting_info(im0)
             return log_string
+            
+        # Filtrar apenas classes de veículos configuradas
+        vehicle_detections = []
+        for *xyxy, conf, cls in reversed(det):
+            if int(cls) in VEHICLE_CLASSES and conf >= MIN_CONFIDENCE:
+                # Verificar se está na ROI
+                bbox = [int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])]
+                if is_in_roi(bbox, ROI_AREA):
+                    # Verificar tamanho mínimo
+                    width = bbox[2] - bbox[0]
+                    height = bbox[3] - bbox[1]
+                    if width >= MIN_OBJECT_SIZE[0] and height >= MIN_OBJECT_SIZE[1]:
+                        vehicle_detections.append([*xyxy, conf, cls])
+        
         for c in det[:, 5].unique():
-            n = (det[:, 5] == c).sum()  # detections per class
-            log_string += f"{n} {self.model.names[int(c)]}{'s' * (n > 1)}, "
-        # write
+            if int(c) in VEHICLE_CLASSES:
+                n = (det[:, 5] == c).sum()  # detections per class
+                log_string += f"{n} {self.model.names[int(c)]}{'s' * (n > 1)}, "
+        
+        # Processar detecções de veículos
         gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
         xywh_bboxs = []
         confs = []
         oids = []
         outputs = []
-        for *xyxy, conf, cls in reversed(det):
+        
+        for *xyxy, conf, cls in vehicle_detections:
             x_c, y_c, bbox_w, bbox_h = xyxy_to_xywh(*xyxy)
             xywh_obj = [x_c, y_c, bbox_w, bbox_h]
             xywh_bboxs.append(xywh_obj)
             confs.append([conf.item()])
             oids.append(int(cls))
-        xywhs = torch.Tensor(xywh_bboxs)
-        confss = torch.Tensor(confs)
+            
+            # Desenhar detecção
+            label = f'{self.model.names[int(cls)]} {conf:.2f}'
+            self.annotator.box_label(xyxy, label, color=colors(int(cls), True))
+        
+        if len(xywh_bboxs) > 0:
+            xywhs = torch.Tensor(xywh_bboxs)
+            confss = torch.Tensor(confs)
 
-        # outputs = deepsort.update(xywhs, confss, oids, im0)
-        # if len(outputs) > 0:
-        #     bbox_xyxy = outputs[:, :4]
-        #     identities = outputs[:, -2]
-        #     object_id = outputs[:, -1]
-        #     draw_boxes(im0, bbox_xyxy, self.model.names, object_id, identities)
-
+            # Processamento simplificado sem DeepSORT
+            # Para cada detecção, verificar se cruza a linha
+            for i, (*xyxy, conf, cls) in enumerate(vehicle_detections):
+                center_x = int((xyxy[0] + xyxy[2]) / 2)
+                center_y = int((xyxy[1] + xyxy[3]) / 2)
+                
+                # Verificar cruzamento da linha (simplificado)
+                self.check_line_crossing(center_x, center_y, int(cls))
+        
+        # Desenhar informações de contagem
+        if SHOW_COUNTERS:
+            im0 = draw_counting_info(im0)
+        
+        # Desenhar anotações
+        im0 = self.annotator.result()
+        
         return log_string
+    
+    def check_line_crossing(self, center_x, center_y, class_id):
+        """Verificar se o objeto cruzou a linha de contagem"""
+        # Implementação simplificada de cruzamento de linha
+        line_y = COUNTING_LINE[0][1]  # Assumindo linha horizontal
+        
+        # Criar ID único baseado na posição
+        object_id = f"{center_x}_{center_y}_{class_id}"
+        
+        # Verificar se está próximo da linha
+        if abs(center_y - line_y) <= CROSSING_THRESHOLD:
+            class_name = self.model.names[class_id]
+            
+            if class_name not in object_counter:
+                object_counter[class_name] = 0
+            
+            # Incrementar contador (lógica simplificada)
+            # Em uma implementação real, seria necessário tracking para evitar contagem dupla
+            if object_id not in speed_line_queue:
+                speed_line_queue[object_id] = True
+                object_counter[class_name] += 1
+                print(f"Veículo detectado: {class_name} - Total: {object_counter[class_name]}")
+
+def draw_counting_info(img):
+    """Desenhar informações de contagem na imagem"""
+    if not SHOW_COUNTERS:
+        return img
+    
+    # Fundo para os contadores
+    cv2.rectangle(img, (10, 10), (300, 30 + len(object_counter) * 30), (0, 0, 0), -1)
+    
+    # Título
+    cv2.putText(img, "CONTAGEM DE VEICULOS", (15, 30), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    
+    # Contadores por classe
+    y_offset = 60
+    for idx, (class_name, count) in enumerate(object_counter.items()):
+        text = f"{class_name}: {count}"
+        cv2.putText(img, text, (15, y_offset + idx * 25), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    
+    return img
 
 
 @hydra.main(version_base=None, config_path=str(DEFAULT_CONFIG.parent), config_name=DEFAULT_CONFIG.name)
