@@ -8,6 +8,9 @@ import cv2
 from ultralytics import YOLO
 import sys
 import os
+import signal
+import time
+from collections import defaultdict
 
 # Importar configurações
 config_path = os.path.join(os.path.dirname(__file__), 'config')
@@ -22,6 +25,60 @@ except ImportError:
     print("❌ Configure primeiro: make configure-line")
     sys.exit(1)
 
+# Variáveis globais para estatísticas
+stats = {
+    'total_vehicles': 0,
+    'vehicles_by_class': defaultdict(int),
+    'start_time': None,
+    'frames_processed': 0,
+    'interrupted': False
+}
+
+def signal_handler(signum, frame):
+    """Handler para capturar Ctrl+C e gerar relatório"""
+    print("\n\n🛑 INTERRUPÇÃO DETECTADA!")
+    stats['interrupted'] = True
+    generate_report()
+    sys.exit(0)
+
+def generate_report():
+    """Gerar relatório final de detecções"""
+    end_time = time.time()
+    duration = end_time - stats['start_time'] if stats['start_time'] else 0
+    
+    print("\n" + "="*60)
+    print("📊 RELATÓRIO FINAL DE DETECÇÃO DE VEÍCULOS")
+    print("="*60)
+    
+    print(f"⏱️  Tempo de execução: {duration:.1f} segundos")
+    print(f"🎬 Frames processados: {stats['frames_processed']}")
+    if duration > 0:
+        fps = stats['frames_processed'] / duration
+        print(f"⚡ FPS médio: {fps:.1f}")
+    
+    print(f"\n🚗 TOTAL DE VEÍCULOS DETECTADOS: {stats['total_vehicles']}")
+    
+    if stats['vehicles_by_class']:
+        print("\n📋 Detalhamento por classe:")
+        for class_name, count in sorted(stats['vehicles_by_class'].items()):
+            percentage = (count / stats['total_vehicles']) * 100 if stats['total_vehicles'] > 0 else 0
+            print(f"   🔸 {class_name}: {count} ({percentage:.1f}%)")
+    else:
+        print("❌ Nenhum veículo detectado")
+    
+    print(f"\n⚙️  Configurações utilizadas:")
+    print(f"   📍 Linha de contagem: {COUNTING_LINE}")
+    print(f"   🎯 ROI: {'Habilitado' if ENABLE_ROI else 'Desabilitado'}")
+    print(f"   🔍 Confiança mínima: {MIN_CONFIDENCE}")
+    print(f"   🚙 Classes monitoradas: {VEHICLE_CLASSES}")
+    
+    if stats['interrupted']:
+        print(f"\n⚠️  Execução interrompida pelo usuário (Ctrl+C)")
+    else:
+        print(f"\n✅ Execução concluída normalmente")
+    
+    print("="*60)
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--source', default='0', help='Fonte (webcam=0 ou arquivo)')
@@ -29,41 +86,90 @@ def main():
     parser.add_argument('--show', action='store_true', help='Mostrar vídeo')
     args = parser.parse_args()
     
+    # Configurar handler para Ctrl+C
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     print(f"🚀 Iniciando detecção com {args.model}")
+    print("💡 Pressione Ctrl+C para parar e ver relatório")
     
     # Carregar modelo
     model = YOLO(args.model)
     
-    # Contador simples
-    vehicle_count = 0
+    # Inicializar estatísticas
+    stats['start_time'] = time.time()
     
-    # Executar predição com as configurações
-    results = model.predict(
-        source=args.source,
-        conf=MIN_CONFIDENCE,
-        show=args.show,
-        save=False,
-        verbose=True
-    )
+    # Configurar captura de vídeo
+    if args.source == '0' or args.source == 0:
+        cap = cv2.VideoCapture(0)
+    else:
+        cap = cv2.VideoCapture(args.source)
+    
+    if not cap.isOpened():
+        print(f"❌ Erro ao abrir fonte: {args.source}")
+        return
     
     print("🎬 Processando vídeo...")
+    print("📊 Estatísticas em tempo real:")
     
     try:
-        for result in results:
-            # Contar veículos detectados
-            if result.boxes is not None:
-                for box in result.boxes:
-                    class_id = int(box.cls[0])
-                    if class_id in VEHICLE_CLASSES:
-                        vehicle_count += 1
-                        class_name = model.names[class_id]
-                        conf = float(box.conf[0])
-                        print(f"🚗 {class_name} detectado (conf: {conf:.2f}) - Total: {vehicle_count}")
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print("📹 Fim do vídeo")
+                break
+            
+            stats['frames_processed'] += 1
+            
+            # Fazer predição no frame
+            results = model.predict(source=frame, conf=MIN_CONFIDENCE, verbose=False, save=False)
+            
+            # Contar veículos detectados no frame atual
+            frame_vehicles = 0
+            for result in results:
+                if result.boxes is not None:
+                    for box in result.boxes:
+                        class_id = int(box.cls[0])
+                        if class_id in VEHICLE_CLASSES:
+                            class_name = model.names[class_id]
+                            conf = float(box.conf[0])
+                            
+                            # Incrementar contadores
+                            stats['total_vehicles'] += 1
+                            stats['vehicles_by_class'][class_name] += 1
+                            frame_vehicles += 1
+            
+            # Mostrar frame se solicitado
+            if args.show:
+                # Desenhar detecções no frame
+                annotated_frame = results[0].plot() if results else frame
+                cv2.imshow('Vehicle Detection', annotated_frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+            
+            # Mostrar estatísticas a cada 30 frames para não poluir o terminal
+            if stats['frames_processed'] % 30 == 0:
+                elapsed = time.time() - stats['start_time']
+                fps = stats['frames_processed'] / elapsed if elapsed > 0 else 0
+                print(f"Frame {stats['frames_processed']:5d} | "
+                      f"Veículos: {stats['total_vehicles']:4d} | "
+                      f"FPS: {fps:5.1f} | "
+                      f"Tempo: {elapsed:6.1f}s")
     
     except KeyboardInterrupt:
-        print("\n⏹️ Interrompido")
+        print("\n🛑 Ctrl+C detectado!")
+        stats['interrupted'] = True
+    except Exception as e:
+        print(f"\n❌ Erro durante execução: {e}")
+        stats['interrupted'] = True
     
-    print(f"\n📊 Total de veículos detectados: {vehicle_count}")
+    finally:
+        # Limpar recursos
+        cap.release()
+        cv2.destroyAllWindows()
+        
+        # Sempre gerar relatório no final
+        generate_report()
 
 if __name__ == "__main__":
     main()
