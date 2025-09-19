@@ -2,10 +2,10 @@
 # Linha de contagem e ROI
 
 # LINHA DE CONTAGEM
-COUNTING_LINE = [(1386, 902), (2746, 933)]
+COUNTING_LINE = [(1261, 1523), (2081, 1547)]
 
 # ÁREA DE INTERESSE (ROI)
-ROI_AREA = [(782, 439), (2923, 2149)]
+ROI_AREA = [(726, 834), (2143, 2012)]
 ENABLE_ROI = True
 
 # Configurações padrão
@@ -30,3 +30,7 @@ SPEED_TIME_WINDOW = 15
 MIN_CONFIDENCE = 0.5
 MIN_OBJECT_SIZE = (30, 30)
 TRACKING_BUFFER = 30
+
+print(f"Configuração salva:")
+print(f"Linha de contagem: [(1261, 1523), (2081, 1547)]")
+print(f"ROI: [(726, 834), (2143, 2012)]")
