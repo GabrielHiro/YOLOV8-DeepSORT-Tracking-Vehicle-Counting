@@ -7,6 +7,7 @@ PYTHON = .venv/bin/python
 VENV_DIR = .venv
 PROJECT_DIR = $(shell pwd)
 VIDEO_DIR = videos
+VIDEO = $(VIDEO_DIR)/video_1.mp4
 MODEL = yolov8n.pt
 
 # Cores para output
@@ -27,18 +28,25 @@ help:
 	@echo "$(YELLOW)Comandos disponíveis:$(NC)"
 	@echo "  $(GREEN)make setup$(NC)          - Configura o ambiente virtual e dependências"
 	@echo "  $(GREEN)make install$(NC)        - Instala dependências do projeto"
+	@echo "  $(GREEN)make configure-line$(NC) - Configura linha de contagem visualmente"
 	@echo "  $(GREEN)make run-video$(NC)      - Executa detecção no vídeo padrão"
 	@echo "  $(GREEN)make run-webcam$(NC)     - Executa detecção na webcam"
+	@echo "  $(GREEN)make run-config$(NC)     - Executa com configuração personalizada"
+	@echo "  $(GREEN)make run-webcam-config$(NC) - Executa webcam com configuração"
 	@echo "  $(GREEN)make run-save$(NC)       - Executa detecção e salva resultado"
 	@echo "  $(GREEN)make run-custom$(NC)     - Executa detecção em vídeo customizado"
+	@echo "  $(GREEN)make show-config$(NC)    - Mostra configuração atual"
+	@echo "  $(GREEN)make edit-config$(NC)    - Edita arquivo de configuração"
 	@echo "  $(GREEN)make test$(NC)           - Testa o sistema com vídeo curto"
 	@echo "  $(GREEN)make clean$(NC)          - Remove arquivos temporários"
 	@echo "  $(GREEN)make status$(NC)         - Mostra status do sistema"
 	@echo "  $(GREEN)make demo$(NC)           - Executa demonstração completa"
 	@echo ""
 	@echo "$(YELLOW)Exemplos de uso:$(NC)"
+	@echo "  make configure-line              - Configurar linha visualmente"
 	@echo "  make run-custom VIDEO=caminho/para/video.mp4"
 	@echo "  make run-video MODEL=yolov8s.pt"
+	@echo "  make show-config                 - Ver configuração atual"
 	@echo ""
 
 # Configuração inicial
@@ -151,5 +159,47 @@ check-venv:
 check-deps: check-venv
 	@$(PYTHON) -c "import ultralytics" 2>/dev/null || (echo "$(RED)❌ Dependências não instaladas. Execute: make install$(NC)" && exit 1)
 
+# Novos comandos para configuração de linha
+.PHONY: configure-line
+configure-line: check-deps
+	@echo "$(YELLOW)🖱️ Configurando linha de contagem visualmente...$(NC)"
+	@mkdir -p config
+	@$(PYTHON) scripts/configure_line.py
+	@echo "$(GREEN)✅ Configuração concluída!$(NC)"
+
+.PHONY: show-config
+show-config: check-venv
+	@echo "$(BLUE)📋 Configuração Atual$(NC)"
+	@echo "$(YELLOW)════════════════════════════════════$(NC)"
+	@if [ -f config/counting_config.py ]; then \
+		$(PYTHON) -c "import sys; sys.path.append('config'); from counting_config import *; \
+		print('Linha de contagem:', COUNTING_LINE); \
+		print('ROI habilitado:', ENABLE_ROI); \
+		print('Área ROI:', ROI_AREA if ENABLE_ROI else 'Desabilitado'); \
+		print('Classes de veículos:', VEHICLE_CLASSES); \
+		print('Confiança mínima:', MIN_CONFIDENCE); \
+		print('Direção de contagem:', COUNTING_DIRECTION)"; \
+	else \
+		echo "$(RED)❌ Arquivo de configuração não encontrado$(NC)"; \
+		echo "$(YELLOW)💡 Execute: make configure-line$(NC)"; \
+	fi
+	@echo "$(YELLOW)════════════════════════════════════$(NC)"
+
+.PHONY: edit-config
+edit-config:
+	@echo "$(YELLOW)📝 Abrindo editor de configuração...$(NC)"
+	@mkdir -p config
+	@${EDITOR:-nano} config/counting_config.py
+
+.PHONY: run-config
+run-config: check-deps
+	@echo "$(YELLOW)⚙️ Executando com configuração personalizada...$(NC)"
+	@$(PYTHON) simple_config_run.py --source $(VIDEO) --model $(MODEL) --show
+
+.PHONY: run-webcam-config
+run-webcam-config: check-deps
+	@echo "$(YELLOW)📹 Executando webcam com configuração personalizada...$(NC)"
+	@$(PYTHON) simple_config_run.py --source 0 --model $(MODEL) --show
+
 # Executar com verificações
-run-video run-webcam run-save run-custom: check-deps
+run-video run-webcam run-save run-custom run-config: check-deps
